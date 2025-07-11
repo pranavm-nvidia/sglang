@@ -159,6 +159,13 @@ class TestCustomAllReduce(CustomTestCase):
         initialize_model_parallel(tensor_model_parallel_size=world_size)
         group = get_tensor_model_parallel_group().device_group
 
+        # TODO (pranavm): How is this test still passing???
+        # test_eager_allreduce (__main__.TestCustomAllReduce.test_eager_allreduce) ... ok
+        # test_graph_allreduce (__main__.TestCustomAllReduce.test_graph_allreduce) ... ok
+        # 
+        # It must not actually be running anything for some reason.
+        raise Exception("TEST FAIL")
+
         for sz in self.TEST_SIZES:
             for dtype in [torch.float32, torch.float16, torch.bfloat16]:
                 for _ in range(self.TEST_LOOP):
