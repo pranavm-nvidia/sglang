@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 _flashinfer_comm = None
 _workspace_manager = None
 
+# TODO (pranavm): This shadows the import above - why?
 if is_flashinfer_available():
     try:
         import flashinfer.comm as comm
