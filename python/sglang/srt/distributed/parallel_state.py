@@ -39,6 +39,7 @@ import torch
 import torch.distributed
 from torch.distributed import Backend, ProcessGroup
 
+from sglang.srt.layers.flashinfer_comm_fusion import flashinfer_mnnvl_allreduce
 from sglang.srt.utils import (
     direct_register_custom_op,
     get_bool_env_var,
@@ -452,49 +453,9 @@ class GroupCoordinator:
                 torch.distributed.all_reduce(input_, group=self.device_group)
             return input_
 
-
-        if is_flashinfer_available():
-            import flashinfer.comm as comm
-            from flashinfer.comm.mapping import Mapping
-
-            # TODO (pranavm): How to set up MP barriers? In the FI tests, we use MPI, but
-            # SGLang seems to have different multi-process mechanisms (GroupCoordinator?).
-
-            original_shape = input_.shape
-            # TODO (pranavm): Need to check for the multi-node case here
-            hidden_size = input_.shape[-1]
-            # TODO (pranavm): Input should be on GPU given the check above, but see if we
-            # should call cuda() here?
-            input_ = input_.view(-1, hidden_size)
-
-            output = torch.empty_like(input_)
-
-            mapping = Mapping(
-                # TODO (pranavm): Check if world size and TP size should be the same?
-                world_size=get_tensor_model_parallel_world_size(),
-                tp_size=get_tensor_model_parallel_world_size(),
-                rank=get_tensor_model_parallel_rank(),
-            )
-
-            mcast_buffer_mnnvl, buffer_flags_mnnvl, max_num_elements_mnnvl = (
-                # TODO (pranavm): Check if dtype is right here:
-                comm.get_allreduce_mnnvl_workspace(mapping, input_.dtype)
-            )
-
-            comm.trtllm_mnnvl_all_reduce(
-                input_,
-                output,
-                mcast_buffer_mnnvl.get_multicast_ptr_as_int64(),
-                mcast_buffer_mnnvl.get_buffer_ptrs_dev_as_ctypes_ptr(),
-                max_num_elements_mnnvl // hidden_size,
-                buffer_flags_mnnvl,
-                mapping.world_size,
-                mapping.rank,
-                True,  # wait_for_results
-                False,  # launch_with_pdl
-            )
-            return output.view(original_shape)
-
+        out = flashinfer_mnnvl_allreduce(input_)
+        if out is not None:
+            return out
 
         if not supports_custom_op():
             self._all_reduce_in_place(input_)

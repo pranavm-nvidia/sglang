@@ -74,6 +74,7 @@ class TestCustomAllReduce(CustomTestCase):
 
     def test_graph_allreduce(self):
         for world_size in self.WORLD_SIZES:
+            # TODO (pranavm): Does this work now with multi-node? Same below.
             if world_size > torch.cuda.device_count():
                 continue
             multi_process_parallel(world_size, self, self.graph_allreduce)

@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 _flashinfer_comm = None
 _workspace_manager = None
 
-# TODO (pranavm): This shadows the import above - why?
 if is_flashinfer_available():
     try:
         import flashinfer.comm as comm
@@ -201,3 +200,82 @@ def cleanup_flashinfer_workspace():
     global _workspace_manager
     if _workspace_manager is not None:
         _workspace_manager.cleanup()
+
+
+class MNNVLWorkspaceManager:
+    def __init__(self):
+        self.world_size = get_tensor_model_parallel_world_size()
+        # TODO (pranavm): Can use `get_tensor_model_parallel_rank` also. Which is right?
+        self.rank = dist.get_rank()
+        self.mcast_buffer_mnnvl = None
+        self.buffer_flags_mnnvl = None
+        self.max_num_elements_mnnvl = None
+        self.initialized = False
+
+    def initialize(self, dtype):
+        if self.initialized:
+            return
+
+        if not is_flashinfer_available():
+            return
+
+        import flashinfer.comm.trtllm_mnnvl_ar as trtllm_mnnvl_ar
+        from flashinfer.comm.mapping import Mapping
+
+        mapping = Mapping(
+            # TODO (pranavm): Check if world size and TP size should be the same?
+            world_size=self.world_size,
+            tp_size=self.world_size,
+            rank=self.rank,
+        )
+
+        if not mapping.is_multi_node():
+            return
+
+        self.mcast_buffer_mnnvl, self.buffer_flags_mnnvl, self.max_num_elements_mnnvl = (
+            trtllm_mnnvl_ar.get_allreduce_mnnvl_workspace(mapping, dtype)
+        )
+        self.initialized = True
+
+
+_mnnvl_workspace_manager = MNNVLWorkspaceManager()
+
+
+def flashinfer_mnnvl_allreduce(
+    input_: torch.Tensor,
+) -> Tuple[torch.Tensor]:
+    """Perform MNNVL allreduce using FlashInfer"""
+    if not is_flashinfer_available():
+        return None
+
+    import flashinfer.comm.trtllm_mnnvl_ar as trtllm_mnnvl_ar
+
+    # TODO (pranavm): Check if dtype is right here:
+    _mnnvl_workspace_manager.initialize(input_.dtype)
+    if not _mnnvl_workspace_manager.initialized:
+        logger.debug("MNNVL workspace not initialized, falling back to standard allreduce")
+        return None
+
+    # TODO (pranavm): How to set up MP barriers? In the FI tests, we use MPI, but
+    # SGLang seems to have different multi-process mechanisms (GroupCoordinator?).
+
+    original_shape = input_.shape
+    # TODO (pranavm): Need to check for the multi-node case here
+    hidden_size = input_.shape[-1]
+    input_ = input_.view(-1, hidden_size).cuda()
+
+    output = torch.empty_like(input_)
+
+    trtllm_mnnvl_ar.trtllm_mnnvl_all_reduce(
+        input_,
+        output,
+        _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_multicast_ptr_as_int64(),
+        _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_buffer_ptrs_dev_as_ctypes_ptr(),
+        _mnnvl_workspace_manager.max_num_elements_mnnvl // hidden_size,
+        _mnnvl_workspace_manager.buffer_flags_mnnvl,
+        _mnnvl_workspace_manager.world_size,
+        _mnnvl_workspace_manager.rank,
+        True,  # wait_for_results
+        False,  # launch_with_pdl
+    )
+    return output.view(original_shape)
