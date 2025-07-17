@@ -250,7 +250,10 @@ def flashinfer_mnnvl_allreduce(
     if not is_flashinfer_available():
         return None
 
+
     import flashinfer.comm.trtllm_mnnvl_ar as trtllm_mnnvl_ar
+
+    trtllm_mnnvl_ar.mpi_barrier()
 
     # TODO (pranavm): Check if dtype is right here:
     _mnnvl_workspace_manager.initialize(input_.dtype)
@@ -281,4 +284,6 @@ def flashinfer_mnnvl_allreduce(
         True,  # wait_for_results
         False,  # launch_with_pdl
     )
+
+    trtllm_mnnvl_ar.mpi_barrier()
     return output.view(original_shape)
