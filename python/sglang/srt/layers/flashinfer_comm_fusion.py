@@ -251,6 +251,8 @@ def flashinfer_mnnvl_allreduce(
         return None
 
 
+    from mpi4py import MPI
+
     import flashinfer.comm.trtllm_mnnvl_ar as trtllm_mnnvl_ar
 
     trtllm_mnnvl_ar.mpi_barrier()
