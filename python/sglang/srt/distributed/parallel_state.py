@@ -39,7 +39,6 @@ import torch
 import torch.distributed
 from torch.distributed import Backend, ProcessGroup
 
-from sglang.srt.layers.flashinfer_comm_fusion import flashinfer_mnnvl_allreduce
 from sglang.srt.utils import (
     direct_register_custom_op,
     get_bool_env_var,
@@ -453,6 +452,8 @@ class GroupCoordinator:
                 torch.distributed.all_reduce(input_, group=self.device_group)
             return input_
 
+        # This import needs to be here to avoid circular imports:
+        from sglang.srt.layers.flashinfer_comm_fusion import flashinfer_mnnvl_allreduce
         out = flashinfer_mnnvl_allreduce(input_)
         if out is not None:
             return out
