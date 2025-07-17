@@ -245,6 +245,8 @@ def flashinfer_mnnvl_allreduce(
     input_: torch.Tensor,
 ) -> Tuple[torch.Tensor]:
     """Perform MNNVL allreduce using FlashInfer"""
+
+    print("CHECKING FLASHINFER MNNVL ALLREDUCE")
     if not is_flashinfer_available():
         return None
 
@@ -266,6 +268,7 @@ def flashinfer_mnnvl_allreduce(
 
     output = torch.empty_like(input_)
 
+    print("Performing MNNVL allreduce with input shape:", input_.shape)
     trtllm_mnnvl_ar.trtllm_mnnvl_all_reduce(
         input_,
         output,
