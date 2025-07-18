@@ -19,6 +19,7 @@ from sglang.srt.distributed.parallel_state import (
 )
 from sglang.test.test_utils import CustomTestCase
 
+from mpi4py import MPI
 
 def get_open_port() -> int:
     # try ipv4
@@ -88,8 +89,7 @@ class TestCustomAllReduce(CustomTestCase):
             local_rank=rank,
         )
 
-        from mpi4py import MPI
-
+        MPI.COMM_WORLD.Barrier()  # Ensure all ranks are ready
 
     # def test_graph_allreduce(self):
     #     for world_size in self.WORLD_SIZES:
