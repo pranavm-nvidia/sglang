@@ -73,6 +73,21 @@ class TestCustomAllReduce(CustomTestCase):
         random.seed(42)  # keep the deterministic seed
 
     def test_mpi(self):
+        for world_size in self.WORLD_SIZES:
+            if world_size > torch.cuda.device_count():
+                continue
+            multi_process_parallel(world_size, self, self.mpi)
+
+    @ray.remote(num_gpus=1, max_calls=1)
+    def mpi(self, world_size, rank, distributed_init_port):
+        distributed_init_method = f"tcp://localhost:{distributed_init_port}"
+        init_distributed_environment(
+            world_size=world_size,
+            rank=rank,
+            distributed_init_method=distributed_init_method,
+            local_rank=rank,
+        )
+
         from mpi4py import MPI
 
 
