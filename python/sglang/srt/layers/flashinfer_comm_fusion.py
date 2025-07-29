@@ -230,6 +230,7 @@ class MNNVLWorkspaceManager:
         )
 
         if not mapping.is_multi_node():
+            print("MNNVL allreduce only works in multi-node setting, skipping")
             return
 
         self.mcast_buffer_mnnvl, self.buffer_flags_mnnvl, self.max_num_elements_mnnvl = (
@@ -259,7 +260,7 @@ def flashinfer_mnnvl_allreduce(
     # TODO (pranavm): Check if dtype is right here:
     _mnnvl_workspace_manager.initialize(input_.dtype)
     if not _mnnvl_workspace_manager.initialized:
-        logger.debug("MNNVL workspace not initialized, falling back to standard allreduce")
+        print("MNNVL workspace not initialized, falling back to standard allreduce")
         return None
 
     # TODO (pranavm): How to set up MP barriers? In the FI tests, we use MPI, but
