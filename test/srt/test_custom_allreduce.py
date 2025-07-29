@@ -19,7 +19,6 @@ from sglang.srt.distributed.parallel_state import (
 )
 from sglang.test.test_utils import CustomTestCase
 
-from mpi4py import MPI
 
 def get_open_port() -> int:
     # try ipv4
@@ -73,14 +72,24 @@ class TestCustomAllReduce(CustomTestCase):
     def setUpClass(cls):
         random.seed(42)  # keep the deterministic seed
 
-    def test_mpi(self):
+    def test_graph_allreduce(self):
+        for world_size in self.WORLD_SIZES:
+            # TODO (pranavm): Does this work now with multi-node? Same below.
+            if world_size > torch.cuda.device_count():
+                continue
+            multi_process_parallel(world_size, self, self.graph_allreduce)
+
+    def test_eager_allreduce(self):
         for world_size in self.WORLD_SIZES:
             if world_size > torch.cuda.device_count():
                 continue
-            multi_process_parallel(world_size, self, self.mpi)
+            multi_process_parallel(world_size, self, self.eager_allreduce)
 
     @ray.remote(num_gpus=1, max_calls=1)
-    def mpi(self, world_size, rank, distributed_init_port):
+    def graph_allreduce(self, world_size, rank, distributed_init_port):
+        del os.environ["CUDA_VISIBLE_DEVICES"]
+        device = torch.device(f"cuda:{rank}")
+        torch.cuda.set_device(device)
         distributed_init_method = f"tcp://localhost:{distributed_init_port}"
         init_distributed_environment(
             world_size=world_size,
@@ -88,106 +97,78 @@ class TestCustomAllReduce(CustomTestCase):
             distributed_init_method=distributed_init_method,
             local_rank=rank,
         )
+        initialize_model_parallel(tensor_model_parallel_size=world_size)
+        group = get_tensor_model_parallel_group().device_group
 
-        MPI.COMM_WORLD.Barrier()  # Ensure all ranks are ready
+        # A small all_reduce for warmup.
+        # this is needed because device communicators might be created lazily
+        # (e.g. NCCL). This will ensure that the communicator is initialized
+        # before any communication happens, so that this group can be used for
+        # graph capture immediately.
+        data = torch.zeros(1)
+        data = data.to(device=device)
+        torch.distributed.all_reduce(data, group=group)
+        torch.cuda.synchronize()
+        del data
 
-    # def test_graph_allreduce(self):
-    #     for world_size in self.WORLD_SIZES:
-    #         # TODO (pranavm): Does this work now with multi-node? Same below.
-    #         if world_size > torch.cuda.device_count():
-    #             continue
-    #         multi_process_parallel(world_size, self, self.graph_allreduce)
+        for sz in self.TEST_SIZES:
+            for dtype in [torch.float32, torch.float16, torch.bfloat16]:
+                for _ in range(self.TEST_LOOP):
+                    with graph_capture() as graph_capture_context:
+                        # use integers so result matches NCCL exactly
+                        inp1 = torch.randint(
+                            1,
+                            16,
+                            (sz,),
+                            dtype=dtype,
+                            device=torch.cuda.current_device(),
+                        )
+                        inp2 = torch.randint(
+                            1,
+                            16,
+                            (sz,),
+                            dtype=dtype,
+                            device=torch.cuda.current_device(),
+                        )
+                        torch.cuda.synchronize()
+                        graph = torch.cuda.CUDAGraph()
+                        with torch.cuda.graph(
+                            graph, stream=graph_capture_context.stream
+                        ):
+                            out1 = tensor_model_parallel_all_reduce(inp1)
+                            # the input buffer is immediately modified to test
+                            # synchronization
+                            dist.all_reduce(inp1, group=group)
+                            out2 = tensor_model_parallel_all_reduce(inp2)
+                            dist.all_reduce(inp2, group=group)
+                    graph.replay()
+                    torch.testing.assert_close(out1, inp1)
+                    torch.testing.assert_close(out2, inp2)
 
-    # def test_eager_allreduce(self):
-    #     for world_size in self.WORLD_SIZES:
-    #         if world_size > torch.cuda.device_count():
-    #             continue
-    #         multi_process_parallel(world_size, self, self.eager_allreduce)
+    @ray.remote(num_gpus=1, max_calls=1)
+    def eager_allreduce(self, world_size, rank, distributed_init_port):
+        del os.environ["CUDA_VISIBLE_DEVICES"]
+        device = torch.device(f"cuda:{rank}")
+        torch.cuda.set_device(device)
+        distributed_init_method = f"tcp://localhost:{distributed_init_port}"
+        init_distributed_environment(
+            world_size=world_size,
+            rank=rank,
+            distributed_init_method=distributed_init_method,
+            local_rank=rank,
+        )
+        initialize_model_parallel(tensor_model_parallel_size=world_size)
+        group = get_tensor_model_parallel_group().device_group
 
-    # @ray.remote(num_gpus=1, max_calls=1)
-    # def graph_allreduce(self, world_size, rank, distributed_init_port):
-    #     del os.environ["CUDA_VISIBLE_DEVICES"]
-    #     device = torch.device(f"cuda:{rank}")
-    #     torch.cuda.set_device(device)
-    #     distributed_init_method = f"tcp://localhost:{distributed_init_port}"
-    #     init_distributed_environment(
-    #         world_size=world_size,
-    #         rank=rank,
-    #         distributed_init_method=distributed_init_method,
-    #         local_rank=rank,
-    #     )
-    #     initialize_model_parallel(tensor_model_parallel_size=world_size)
-    #     group = get_tensor_model_parallel_group().device_group
-
-    #     # A small all_reduce for warmup.
-    #     # this is needed because device communicators might be created lazily
-    #     # (e.g. NCCL). This will ensure that the communicator is initialized
-    #     # before any communication happens, so that this group can be used for
-    #     # graph capture immediately.
-    #     data = torch.zeros(1)
-    #     data = data.to(device=device)
-    #     torch.distributed.all_reduce(data, group=group)
-    #     torch.cuda.synchronize()
-    #     del data
-
-    #     for sz in self.TEST_SIZES:
-    #         for dtype in [torch.float32, torch.float16, torch.bfloat16]:
-    #             for _ in range(self.TEST_LOOP):
-    #                 with graph_capture() as graph_capture_context:
-    #                     # use integers so result matches NCCL exactly
-    #                     inp1 = torch.randint(
-    #                         1,
-    #                         16,
-    #                         (sz,),
-    #                         dtype=dtype,
-    #                         device=torch.cuda.current_device(),
-    #                     )
-    #                     inp2 = torch.randint(
-    #                         1,
-    #                         16,
-    #                         (sz,),
-    #                         dtype=dtype,
-    #                         device=torch.cuda.current_device(),
-    #                     )
-    #                     torch.cuda.synchronize()
-    #                     graph = torch.cuda.CUDAGraph()
-    #                     with torch.cuda.graph(
-    #                         graph, stream=graph_capture_context.stream
-    #                     ):
-    #                         out1 = tensor_model_parallel_all_reduce(inp1)
-    #                         # the input buffer is immediately modified to test
-    #                         # synchronization
-    #                         dist.all_reduce(inp1, group=group)
-    #                         out2 = tensor_model_parallel_all_reduce(inp2)
-    #                         dist.all_reduce(inp2, group=group)
-    #                 graph.replay()
-    #                 torch.testing.assert_close(out1, inp1)
-    #                 torch.testing.assert_close(out2, inp2)
-
-    # @ray.remote(num_gpus=1, max_calls=1)
-    # def eager_allreduce(self, world_size, rank, distributed_init_port):
-    #     del os.environ["CUDA_VISIBLE_DEVICES"]
-    #     device = torch.device(f"cuda:{rank}")
-    #     torch.cuda.set_device(device)
-    #     distributed_init_method = f"tcp://localhost:{distributed_init_port}"
-    #     init_distributed_environment(
-    #         world_size=world_size,
-    #         rank=rank,
-    #         distributed_init_method=distributed_init_method,
-    #         local_rank=rank,
-    #     )
-    #     initialize_model_parallel(tensor_model_parallel_size=world_size)
-    #     group = get_tensor_model_parallel_group().device_group
-
-    #     for sz in self.TEST_SIZES:
-    #         for dtype in [torch.float32, torch.float16, torch.bfloat16]:
-    #             for _ in range(self.TEST_LOOP):
-    #                 inp1 = torch.randint(
-    #                     1, 16, (sz,), dtype=dtype, device=torch.cuda.current_device()
-    #                 )
-    #                 out1 = tensor_model_parallel_all_reduce(inp1)
-    #                 dist.all_reduce(inp1, group=group)
-    #                 torch.testing.assert_close(out1, inp1)
+        for sz in self.TEST_SIZES:
+            for dtype in [torch.float32, torch.float16, torch.bfloat16]:
+                for _ in range(self.TEST_LOOP):
+                    inp1 = torch.randint(
+                        1, 16, (sz,), dtype=dtype, device=torch.cuda.current_device()
+                    )
+                    out1 = tensor_model_parallel_all_reduce(inp1)
+                    dist.all_reduce(inp1, group=group)
+                    torch.testing.assert_close(out1, inp1)
 
 
 if __name__ == "__main__":
