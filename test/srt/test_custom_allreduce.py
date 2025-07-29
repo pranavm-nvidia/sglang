@@ -81,8 +81,8 @@ class TestCustomAllReduce(CustomTestCase):
 
     def test_eager_allreduce(self):
         for world_size in self.WORLD_SIZES:
-            if world_size > torch.cuda.device_count():
-                continue
+            # if world_size > torch.cuda.device_count():
+            #     continue
             multi_process_parallel(world_size, self, self.eager_allreduce)
 
     @ray.remote(num_gpus=1, max_calls=1)
