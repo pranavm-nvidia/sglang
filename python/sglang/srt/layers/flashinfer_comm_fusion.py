@@ -227,6 +227,7 @@ class MNNVLWorkspaceManager:
             world_size=self.world_size,
             tp_size=self.world_size,
             rank=self.rank,
+            gpus_per_node=torch.cuda.device_count(),
         )
 
         if not mapping.is_multi_node():
