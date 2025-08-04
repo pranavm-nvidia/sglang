@@ -278,8 +278,8 @@ def flashinfer_mnnvl_allreduce(
     trtllm_mnnvl_ar.trtllm_mnnvl_all_reduce(
         input_,
         output,
-        _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_multicast_ptr_as_int64(),
-        _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_buffer_ptrs_dev_as_ctypes_ptr(),
+        _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_multicast_ptr(),
+        _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_buffer_ptrs_dev(),
         _mnnvl_workspace_manager.max_num_elements_mnnvl // hidden_size,
         _mnnvl_workspace_manager.buffer_flags_mnnvl,
         _mnnvl_workspace_manager.world_size,
