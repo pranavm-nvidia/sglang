@@ -277,7 +277,6 @@ def flashinfer_mnnvl_allreduce(
     print("Performing MNNVL allreduce with input shape:", input_.shape)
     trtllm_mnnvl_ar.trtllm_mnnvl_all_reduce(
         input_,
-        output,
         _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_multicast_ptr(),
         _mnnvl_workspace_manager.mcast_buffer_mnnvl.get_buffer_ptrs_dev(),
         _mnnvl_workspace_manager.max_num_elements_mnnvl // hidden_size,
@@ -286,6 +285,7 @@ def flashinfer_mnnvl_allreduce(
         _mnnvl_workspace_manager.rank,
         True,  # wait_for_results
         False,  # launch_with_pdl
+        output,
     )
 
     # dist.barrier()
