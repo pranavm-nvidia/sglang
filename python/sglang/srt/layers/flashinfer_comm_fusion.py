@@ -255,7 +255,7 @@ def flashinfer_mnnvl_allreduce(
     import torch.distributed as dist
     import flashinfer.comm.trtllm_mnnvl_ar as trtllm_mnnvl_ar
 
-    dist.barrier()
+    # dist.barrier()
 
     # TODO (pranavm): Check if dtype is right here:
     _mnnvl_workspace_manager.initialize(input_.dtype)
@@ -287,5 +287,5 @@ def flashinfer_mnnvl_allreduce(
         False,  # launch_with_pdl
     )
 
-    dist.barrier()
+    # dist.barrier()
     return output.view(original_shape)
