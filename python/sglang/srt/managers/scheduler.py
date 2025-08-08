@@ -1680,6 +1680,7 @@ class Scheduler(
             batch.batch_is_full = False
 
         # Update batch tensors
+        print(f"Scheduler.update_running_batch: Preparing for decode")
         batch.prepare_for_decode()
         return batch
 

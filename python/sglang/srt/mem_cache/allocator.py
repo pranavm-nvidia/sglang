@@ -66,6 +66,8 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
 
     def restore_state(self, state):
         self.free_pages, self.release_pages = state
+        print(f"[BaseTokenToKVPoolAllocator.restore_state] Restoring allocator state. Number of free pages: {len(self.free_pages)}, number of released pages: {len(self.release_pages)}")
+        print(f"[BaseTokenToKVPoolAllocator.restore_state] len(self.release_pages) = {len(self.release_pages)}")
 
     def backup_state(self):
         return (self.free_pages, self.release_pages)
@@ -80,12 +82,15 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
             self.free(torch.cat(self.free_group))
 
     def merge_and_sort_free(self):
+        print(f"Attempting to merge_and_sort_free. Free pages: {len(self.free_pages)}, Released pages: {len(self.release_pages)}")
         if len(self.release_pages) > 0:
+            print(f"[BaseTokenToKVPoolAllocator.merge_and_sort_free] Merging released pages back to free pages. Reclaimed {len(self.release_pages)} pages.")
             self.free_pages = torch.cat((self.free_pages, self.release_pages))
             self.free_pages, _ = torch.sort(self.free_pages)
             self.release_pages = torch.empty(
                 (0,), dtype=self.release_pages.dtype, device=self.device
             )
+            print(f"[BaseTokenToKVPoolAllocator.merge_and_sort_free] len(self.release_pages) = {len(self.release_pages)}")
 
     def get_cpu_copy(self, *args, **kwargs):
         # FIXME: reuse the get_cpu_copy after paged allocator is implemented
@@ -126,6 +131,7 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         self.free_pages = torch.arange(
             1, self.size + 1, dtype=torch.int64, device=self.device
         )
+        print(f"[TokenToKVPoolAllocator.clear] len(self.free_pages) = {len(self.free_pages)}")
         self.is_not_in_free_group = True
         self.free_group = []
         self.release_pages = torch.empty((0,), dtype=torch.int64, device=self.device)
@@ -142,6 +148,7 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         select_index = self.free_pages[:need_size]
         self.free_pages = self.free_pages[need_size:]
+        print(f"[TokenToKVPoolAllocator.alloc] len(self.free_pages) = {len(self.free_pages)}")
         return select_index
 
     def free(self, free_index: torch.Tensor):
@@ -150,8 +157,10 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         if self.is_not_in_free_group:
             self.release_pages = torch.cat((self.release_pages, free_index))
+            print(f"[TokenToKVPoolAllocator.free] len(self.release_pages) = {len(self.release_pages)}")
         else:
             self.free_group.append(free_index)
+            print(f"[TokenToKVPoolAllocator.free] Added to free_group. len(self.free_group) = {len(self.free_group)}")
 
     def get_cpu_copy(self, indices):
         return self._kvcache.get_cpu_copy(indices)
@@ -247,6 +256,7 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             self.free_swa(free_index)
         else:
             self.free_group.append(free_index)
+            print(f"[SWATokenToKVPoolAllocator.free] Added to free_group. len(self.free_group) = {len(self.free_group)}")
         assert (
             self.full_attn_allocator.available_size() <= self.full_attn_allocator.size
         )
@@ -440,6 +450,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         out_pages = self.free_pages[:num_pages]
         self.free_pages = self.free_pages[num_pages:]
+        print(f"[PagedTokenToKVPoolAllocator.alloc] len(self.free_pages) = {len(self.free_pages)}")
 
         out_indices = (
             out_pages[:, None] * self.page_size
@@ -496,6 +507,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             return None
 
         self.free_pages = self.free_pages[num_new_pages:]
+        print(f"[PagedTokenToKVPoolAllocator.alloc_extend] len(self.free_pages) = {len(self.free_pages)}")
         return out_indices
 
     def alloc_decode(
@@ -503,11 +515,14 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         seq_lens: torch.Tensor,
         last_loc: torch.Tensor,
     ):
+        print("[PagedTokenToKVPoolAllocator.alloc_decode] Start")
         if self.debug_mode:
+            print("[PagedTokenToKVPoolAllocator.alloc_decode] Checking debug assertion")
             assert torch.all(
                 (last_loc + 2) % self.page_size == seq_lens % self.page_size
             )
 
+        print("[PagedTokenToKVPoolAllocator.alloc_decode] Calculating estimated_num_new_pages")
         estimated_num_new_pages = (
             (
                 (seq_lens + self.page_size - 1) // self.page_size
@@ -516,11 +531,21 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             .sum()
             .item()
         )
+        print(f"[PagedTokenToKVPoolAllocator.alloc_decode] estimated_num_new_pages before hack: {estimated_num_new_pages}")
+        # HACK: Free more aggressively.
+        estimated_num_new_pages *= 2
+        print(f"[PagedTokenToKVPoolAllocator.alloc_decode] estimated_num_new_pages after hack: {estimated_num_new_pages}")
+
         if estimated_num_new_pages > len(self.free_pages):
+            print("[PagedTokenToKVPoolAllocator.alloc_decode] estimated_num_new_pages > len(self.free_pages), calling merge_and_sort_free()")
             self.merge_and_sort_free()
+        else:
+            print("[PagedTokenToKVPoolAllocator.alloc_decode] Enough free pages, skipping merge_and_sort_free()")
 
         bs = len(seq_lens)
+        print(f"[PagedTokenToKVPoolAllocator.alloc_decode] bs: {bs}")
         out_indices = torch.empty((bs,), dtype=torch.int64, device=self.device)
+        print("[PagedTokenToKVPoolAllocator.alloc_decode] Calling alloc_decode_kernel")
         alloc_decode_kernel[(bs,)](
             seq_lens,
             last_loc,
@@ -536,20 +561,25 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         num_new_pages = self.ret_values.item()
         if num_new_pages > len(self.free_pages):
+            print(f"[PagedTokenToKVPoolAllocator.alloc_decode] Not enough free pages. num_new_pages: {num_new_pages}, len(self.free_pages): {len(self.free_pages)}")
             return None
 
         self.free_pages = self.free_pages[num_new_pages:]
+        print(f"[PagedTokenToKVPoolAllocator.alloc_decode] len(self.free_pages) = {len(self.free_pages)}")
         return out_indices
 
     def free(self, free_index: torch.Tensor):
+        print(f"[PagedTokenToKVPoolAllocator.free] free_index.shape: {free_index.shape}")
         if free_index.numel() == 0:
             return
 
         if self.is_not_in_free_group:
             free_page_indices = torch.unique(free_index // self.page_size)
             self.release_pages = torch.cat((free_page_indices, self.release_pages))
+            print(f"[PagedTokenToKVPoolAllocator.free] len(self.release_pages) = {len(self.release_pages)}")
         else:
             self.free_group.append(free_index)
+            print(f"[PagedTokenToKVPoolAllocator.free] Added to free_group. len(self.free_group) = {len(self.free_group)}")
 
         if self.debug_mode:
             assert len(torch.unique(self.free_pages)) == len(self.free_pages)
@@ -559,6 +589,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         self.free_pages = torch.arange(
             1, self.num_pages + 1, dtype=torch.int64, device=self.device
         )
+        print(f"[PagedTokenToKVPoolAllocator.clear] len(self.free_pages) = {len(self.free_pages)}")
         self.is_not_in_free_group = True
         self.free_group = []
         self.release_pages = torch.empty((0,), dtype=torch.int64, device=self.device)
@@ -704,6 +735,7 @@ class AscendPagedTokenToKVPoolAllocator(PagedTokenToKVPoolAllocator):
             return None
 
         self.free_pages = self.free_pages[num_new_pages:]
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_extend] len(self.free_pages) = {len(self.free_pages)}")
         return out_indices
 
     def alloc_decode(
@@ -724,8 +756,14 @@ class AscendPagedTokenToKVPoolAllocator(PagedTokenToKVPoolAllocator):
             .sum()
             .item()
         )
-        if estimated_num_new_pages > len(self.free_pages):
-            self.merge_and_sort_free()
+
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_decode] seq_lens: {seq_lens[0]}")
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_decode] page_size: {self.page_size}")
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_decode] (seq_lens + page_size - 1) // page_size: {((seq_lens + self.page_size - 1) // self.page_size)[0]}")
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_decode] (seq_lens - 1 + page_size - 1) // page_size: {((seq_lens - 1 + self.page_size - 1) // self.page_size)[0]}")
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_decode] estimated_num_new_pages: {estimated_num_new_pages}")
+        # if estimated_num_new_pages > len(self.free_pages):
+        self.merge_and_sort_free()
 
         bs = len(seq_lens)
         out_indices = torch.empty((bs,), dtype=torch.int32, device=self.device)
@@ -746,9 +784,11 @@ class AscendPagedTokenToKVPoolAllocator(PagedTokenToKVPoolAllocator):
             return None
 
         self.free_pages = self.free_pages[num_new_pages:]
+        print(f"[AscendPagedTokenToKVPoolAllocator.alloc_decode] len(self.free_pages) = {len(self.free_pages)}")
         return out_indices
 
     def clear(self):
         super().clear()
         self.free_pages = self.free_pages.to(torch.int32)
         self.release_pages = self.release_pages.to(torch.int32)
+        print(f"[AscendPagedTokenToKVPoolAllocator.clear] len(self.free_pages) = {len(self.free_pages)}")

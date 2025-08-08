@@ -1029,6 +1029,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             state = self.token_to_kv_pool_allocator.backup_state()
 
         out_cache_loc = self.token_to_kv_pool_allocator.alloc_decode(seq_lens, last_loc)
+
         if out_cache_loc is None:
             error_msg = (
                 f"Decode out of memory. Try to lower your batch size.\n"
@@ -1036,6 +1037,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 f"{self._available_and_evictable_str()}"
             )
             logger.error(error_msg)
+            print(f"ALLOCATOR WAS: {self.token_to_kv_pool_allocator=}")
+            logger.error(f"ALLOCATOR WAS: {self.token_to_kv_pool_allocator=}")
             raise RuntimeError(error_msg)
 
         if backup_state:
@@ -1399,18 +1402,25 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                     * server_args.speculative_num_steps
                     + num_reqs * server_args.speculative_num_draft_tokens
                 )
-            return (
+            required_tokens = (
                 num_reqs * global_config.retract_decode_steps + headroom_for_spec_decode
             )
+            print(f"[get_required_tokens] num_reqs: {num_reqs}")
+            print(f"[get_required_tokens] global_config.retract_decode_steps: {global_config.retract_decode_steps}")
+            print(f"[get_required_tokens] headroom_for_spec_decode: {headroom_for_spec_decode}")
+            print(f"[get_required_tokens] required_tokens: {required_tokens}")
+            return required_tokens
 
         def _get_available_size():
             if self.is_hybrid:
-                return min(
-                    self.token_to_kv_pool_allocator.full_available_size(),
-                    self.token_to_kv_pool_allocator.swa_available_size(),
-                )
+                full_available_size = self.token_to_kv_pool_allocator.full_available_size()
+                swa_available_size = self.token_to_kv_pool_allocator.swa_available_size()
+                print(f"[_get_available_size] full_available_size: {full_available_size}, swa_available_size: {swa_available_size}")
+                return min(full_available_size, swa_available_size)
             else:
-                return self.token_to_kv_pool_allocator.available_size()
+                available_size = self.token_to_kv_pool_allocator.available_size()
+                print(f"[_get_available_size] available_size: {available_size}")
+                return available_size
 
         retracted_reqs = []
         seq_lens_cpu = self.seq_lens.cpu().numpy()
@@ -1452,6 +1462,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 token_indices = self.req_to_token_pool.req_to_token[
                     req.req_pool_idx, : seq_lens_cpu[idx]
                 ]
+                print(f"[Retract] req_pool_idx: {req.req_pool_idx}, seq_lens_cpu[{idx}]: {seq_lens_cpu[idx]}")
+                print(f"[Retract] req_to_token_pool.req_to_token shape: {self.req_to_token_pool.req_to_token.shape}")
+                print(f"[Retract] token_indices: {token_indices.shape}")
                 self.token_to_kv_pool_allocator.free(token_indices)
                 self.req_to_token_pool.free(req.req_pool_idx)
             else:
@@ -1462,6 +1475,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 token_indices = self.req_to_token_pool.req_to_token[
                     req.req_pool_idx, last_uncached_pos : seq_lens_cpu[idx]
                 ]
+                print(f"[Retract] last_uncached_pos: {last_uncached_pos}, seq_lens_cpu[{idx}]: {seq_lens_cpu[idx]}")
+                print(f"[Retract] req_pool_idx: {req.req_pool_idx}")
+                print(f"[Retract] req_to_token_pool.req_to_token shape: {self.req_to_token_pool.req_to_token.shape}")
+                print(f"[Retract] token_indices: {token_indices.shape}")
                 self.token_to_kv_pool_allocator.free(token_indices)
                 self.req_to_token_pool.free(req.req_pool_idx)
 
