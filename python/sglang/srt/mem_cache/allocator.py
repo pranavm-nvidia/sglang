@@ -556,6 +556,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             self.page_size,
         )
 
+        print(f"[PagedTokenToKVPoolAllocator.alloc_decode] Finished alloc_decode_kernel. {out_indices=}")
         if self.debug_mode:
             assert len(torch.unique(out_indices)) == len(out_indices)
 

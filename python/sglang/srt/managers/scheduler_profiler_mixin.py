@@ -140,9 +140,9 @@ class SchedulerProfilerMixin:
             self.torch_profiler.start()
             self.profile_in_progress = True
 
-        if "MEM" in activities:
-            torch.cuda.memory._record_memory_history(max_entries=100000)
-            self.profile_in_progress = True
+        # if "MEM" in activities:
+        torch.cuda.memory._record_memory_history(max_entries=100000)
+        self.profile_in_progress = True
 
         if "CUDA_PROFILER" in activities:
             torch.cuda.cudart().cudaProfilerStart()
